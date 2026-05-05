@@ -28,6 +28,10 @@ BASE_URL   = "https://api.jolpi.ca/ergast/f1"
 UNIT_RACE  = 1
 UNIT_QUALY = 2
 
+DAYS_NL   = ["Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo"]
+MONTHS_NL = ["", "jan", "feb", "mrt", "apr", "mei", "jun",
+             "jul", "aug", "sep", "okt", "nov", "dec"]
+
 
 class BasePlugin:
     def __init__(self):
@@ -88,10 +92,6 @@ class BasePlugin:
             if not races:
                 Domoticz.Log("No upcoming race data returned.")
                 return
-
-            DAYS_NL   = ["Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo"]
-            MONTHS_NL = ["", "jan", "feb", "mrt", "apr", "mei", "jun",
-                         "jul", "aug", "sep", "okt", "nov", "dec"]
 
             race     = races[0]
             name     = race["raceName"]
