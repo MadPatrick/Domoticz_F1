@@ -134,7 +134,7 @@ class BasePlugin:
                 self.lastText = text
                 self.lastLocation = location
 
-                Domoticz.Log("Weekend device updated (" + device_name + "):\n" + text)
+                Domoticz.Log("Weekend device updated (" + device_name + ")")
 
             elif not text:
                 Domoticz.Log("No upcoming race weekend found.")
@@ -145,7 +145,7 @@ class BasePlugin:
                     sValue=next_event
                 )
                 self.lastNextEvent = next_event
-                Domoticz.Log("Next Event device updated: " + next_event)
+                Domoticz.Log("Next Event device updated")
 
         except Exception as e:
             Domoticz.Error("Error processing ICS: " + str(e))
