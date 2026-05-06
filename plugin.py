@@ -1,13 +1,21 @@
 """
-<plugin key="F1Info" name="F1 Race Info" author="MadPatrick" version="2.0.0"
+<plugin key="F1Info" name="F1 Race Info" author="MadPatrick" version="2.1.0"
         externallink="https://files-f1.motorsportcalendars.com">
     <description>
         Haalt het aankomende F1 race weekend schema op uit de motorsportcalendars.com ICS feed.
-        Toont alle sessies (VT1/VT2/VT3/Sprint/Kwalificatie/Race) in één tekst device.
+        Toont de sessies van het komende race weekend gefilterd op type.
+        De device-naam wordt automatisch bijgewerkt met de locatie van de Grand Prix.
     </description>
     <params>
         <param field="Mode1" label="UTC offset in uren (bijv. 1, 2, -5)" width="75px" required="true" default="1"/>
         <param field="Mode2" label="Poll interval (minuten)" width="50px" required="true" default="60"/>
+        <param field="Mode3" label="Sessies weergeven" width="200px">
+            <options>
+                <option label="Training / Sprint / Race" value="all" default="true"/>
+                <option label="Sprint / Race" value="sprint_race"/>
+                <option label="Race" value="race"/>
+            </options>
+        </param>
         <param field="Mode6" label="Debug" width="75px">
             <options>
                 <option label="True" value="Debug"/>
@@ -26,7 +34,7 @@ import threading
 
 ICS_URL      = "https://files-f1.motorsportcalendars.com/nl/f1-calendar_p1_p2_p3_qualifying_sprint_gp.ics"
 UNIT_WEEKEND = 1
-SESSION_SEP  = " - "   # separator between race name and session type in ICS SUMMARY
+SESSION_SEP  = " - "   # separator between race name and session type in ICS SUMMARY (old format)
 WINDOW_HOURS = 4       # how many hours after a session starts it still counts as "upcoming"
 
 DAYS_NL   = ["Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo"]
@@ -38,16 +46,19 @@ class BasePlugin:
     def __init__(self):
         self.offset         = 1
         self.pollInterval   = 60
+        self.sessionFilter  = "all"
         self.heartbeatCount = 0
         self.lastText       = ""
+        self.lastLocation   = ""
 
     # ------------------------------------------------------------------
     def onStart(self):
         if Parameters["Mode6"] == "Debug":
             Domoticz.Debugging(1)
 
-        self.offset       = int(Parameters["Mode1"])
-        self.pollInterval = int(Parameters["Mode2"])
+        self.offset        = int(Parameters["Mode1"])
+        self.pollInterval  = int(Parameters["Mode2"])
+        self.sessionFilter = Parameters.get("Mode3", "all")
 
         if UNIT_WEEKEND not in Devices:
             Domoticz.Device(Name="F1 Weekend", Unit=UNIT_WEEKEND, TypeName="Text").Create()
@@ -87,11 +98,13 @@ class BasePlugin:
 
         try:
             events = self._parseICS(ics_text)
-            text   = self._buildWeekendText(events)
-            if text and text != self.lastText:
-                Devices[UNIT_WEEKEND].Update(nValue=0, sValue=text)
-                self.lastText = text
-                Domoticz.Log(f"Weekend device bijgewerkt:\n{text}")
+            text, location = self._buildWeekendText(events)
+            device_name = location if location else "F1 Weekend"
+            if text and (text != self.lastText or location != self.lastLocation):
+                Devices[UNIT_WEEKEND].Update(nValue=0, sValue=text, Name=device_name)
+                self.lastText     = text
+                self.lastLocation = location
+                Domoticz.Log(f"Weekend device bijgewerkt ({device_name}):\n{text}")
             elif not text:
                 Domoticz.Log("Geen aankomend race weekend gevonden.")
         except Exception as e:
@@ -158,57 +171,95 @@ class BasePlugin:
         return dt
 
     # ------------------------------------------------------------------
+    def _parseSummary(self, summary):
+        """Extraheer (session_type, location) uit een SUMMARY string.
+
+        Ondersteunde formaten:
+          - "F1: Vrije Training 1 (Grand Prix van Canada)"
+          - "Formule 1 Grand Prix van Canada 2025 - Vrije Training 1"
+        """
+        # Formaat: "F1: <Session> (<Location>)"
+        m = re.match(r'^F1:\s*(.+?)\s*\((.+)\)\s*$', summary)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+
+        # Formaat: "Formule 1 <Location> <Year> - <Session>" of "<Location> - <Session>"
+        if SESSION_SEP in summary:
+            left, session = summary.rsplit(SESSION_SEP, 1)
+            location = re.sub(r'^Formule\s+1\s+', '', left.strip())
+            location = re.sub(r'\s+\d{4}$', '', location.strip())
+            return session.strip(), location.strip()
+
+        return summary.strip(), ""
+
+    # ------------------------------------------------------------------
+    def _sessionPassesFilter(self, session_lower):
+        """Controleer of een sessie voldoet aan het ingestelde filter."""
+        is_training = "training" in session_lower
+
+        if self.sessionFilter == "all":
+            return True
+        elif self.sessionFilter == "sprint_race":
+            return not is_training
+        elif self.sessionFilter == "race":
+            return "grand prix" in session_lower
+        return True
+
+    # ------------------------------------------------------------------
     def _buildWeekendText(self, events):
-        """Zoek het eerstvolgende race weekend en formatteer alle sessies."""
+        """Zoek het eerstvolgende race weekend en formatteer de gefilterde sessies.
+
+        Geeft een tuple (tekst, locatie) terug.
+        """
         now = datetime.datetime.utcnow() + datetime.timedelta(hours=self.offset)
 
         parsed = []
         for ev in events:
             dt = self._parseDT(ev["DTSTART"], ev["DTSTART_TZID"])
-            parsed.append((dt, ev["SUMMARY"]))
+            session, location = self._parseSummary(ev["SUMMARY"])
+            parsed.append((dt, session, location))
 
         parsed.sort(key=lambda x: x[0])
 
         # Zoek het eerste event dat nog niet meer dan WINDOW_HOURS uur geleden begon
         future_idx = None
-        for i, (dt, _) in enumerate(parsed):
+        for i, (dt, _session, _loc) in enumerate(parsed):
             if dt >= now - datetime.timedelta(hours=WINDOW_HOURS):
                 future_idx = i
                 break
 
         if future_idx is None:
-            return ""
+            return "", ""
 
-        # Bepaal de race-prefix: alles vóór SESSION_SEP in het eerste aankomende event
-        first_summary = parsed[future_idx][1]
-        if SESSION_SEP in first_summary:
-            race_prefix = first_summary.rsplit(SESSION_SEP, 1)[0]
-        else:
-            race_prefix = first_summary
+        # Bepaal de locatie van het eerste aankomende event
+        race_location = parsed[future_idx][2]
 
-        # Verzamel alle sessies van dit race weekend
+        # Verzamel alle sessies van dit race weekend (zelfde locatie)
         weekend_events = [
-            (dt, summ) for dt, summ in parsed
-            if summ.startswith(race_prefix)
+            (dt, session) for dt, session, loc in parsed
+            if loc == race_location
         ]
 
         if not weekend_events:
-            return ""
+            return "", ""
 
-        # Maak een leesbare naam: verwijder "Formule 1 " en het jaartal
-        race_name = race_prefix
-        race_name = re.sub(r"^Formule 1\s+", "", race_name)
-        race_name = re.sub(r"\s+\d{4}$", "", race_name)
+        # Filter op sessie-type
+        filtered_events = [
+            (dt, session) for dt, session in weekend_events
+            if self._sessionPassesFilter(session.lower())
+        ]
 
-        lines = [race_name]
-        for dt, summ in weekend_events:
+        if not filtered_events:
+            return "", ""
+
+        lines = []
+        for dt, session in filtered_events:
             weekday  = DAYS_NL[dt.weekday()]
             month_nl = MONTHS_NL[dt.month]
             time_str = dt.strftime("%H:%M")
-            session  = summ.rsplit(SESSION_SEP, 1)[-1] if SESSION_SEP in summ else summ
-            lines.append(f"{weekday} {dt.day} {month_nl}  {time_str}  {session}")
+            lines.append(f"{weekday} {dt.day} {month_nl} {time_str} : {session}")
 
-        return "\n".join(lines)
+        return "\n".join(lines), race_location
 
     # ------------------------------------------------------------------
     def onStop(self):
