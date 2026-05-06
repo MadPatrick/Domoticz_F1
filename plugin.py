@@ -75,7 +75,11 @@ class BasePlugin:
     def _fetchCalendar(self):
         Domoticz.Debug(f"GET {ICS_URL}")
         try:
-            with urllib.request.urlopen(ICS_URL, timeout=10) as resp:
+            req = urllib.request.Request(
+                ICS_URL,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; Domoticz F1 plugin)"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 ics_text = resp.read().decode("utf-8", errors="replace")
         except Exception as e:
             Domoticz.Error(f"ICS ophalen mislukt: {e}")
