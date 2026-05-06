@@ -1,5 +1,5 @@
 """
-<plugin key="F1Info" name="F1 Race Info" author="MadPatrick" version="2.1.0"
+<plugin key="F1Info" name="F1 Race Info" author="MadPatrick" version="2.1.1"
         externallink="https://files-f1.motorsportcalendars.com">
     <description>
         Haalt het aankomende F1 race weekend schema op uit de motorsportcalendars.com ICS feed.
@@ -36,6 +36,7 @@ ICS_URL      = "https://files-f1.motorsportcalendars.com/nl/f1-calendar_p1_p2_p3
 UNIT_WEEKEND = 1
 SESSION_SEP  = " - "   # separator between race name and session type in ICS SUMMARY (old format)
 WINDOW_HOURS = 4       # how many hours after a session starts it still counts as "upcoming"
+FETCH_TIMEOUT = 10     # seconds for urlopen timeout
 
 DAYS_NL   = ["Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo"]
 MONTHS_NL = ["", "jan", "feb", "mrt", "apr", "mei", "jun",
@@ -50,6 +51,8 @@ class BasePlugin:
         self.heartbeatCount = 0
         self.lastText       = ""
         self.lastLocation   = ""
+        self._stopEvent     = threading.Event()
+        self._threads       = []
 
     # ------------------------------------------------------------------
     def onStart(self):
@@ -67,8 +70,16 @@ class BasePlugin:
         Domoticz.Heartbeat(60)
         Domoticz.Log("F1 Info plugin gestart.")
 
-        t = threading.Thread(target=self._fetchCalendar)
-        t.daemon = True
+        self._stopEvent.clear()
+        self._startFetchThread()
+
+    # ------------------------------------------------------------------
+    def _startFetchThread(self):
+        """Start een nieuwe fetch-thread en registreer hem."""
+        # Verwijder afgeronde threads uit de lijst
+        self._threads = [t for t in self._threads if t.is_alive()]
+        t = threading.Thread(target=self._fetchCalendar, daemon=True)
+        self._threads.append(t)
         t.start()
 
     # ------------------------------------------------------------------
@@ -78,19 +89,19 @@ class BasePlugin:
             return
 
         Domoticz.Debug("Heartbeat: ICS kalender ophalen.")
-        t = threading.Thread(target=self._fetchCalendar)
-        t.daemon = True
-        t.start()
+        self._startFetchThread()
 
     # ------------------------------------------------------------------
     def _fetchCalendar(self):
+        if self._stopEvent.is_set():
+            return
         Domoticz.Debug(f"GET {ICS_URL}")
         try:
             req = urllib.request.Request(
                 ICS_URL,
                 headers={"User-Agent": "Mozilla/5.0 (compatible; Domoticz F1 plugin)"}
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
                 ics_text = resp.read().decode("utf-8", errors="replace")
         except Exception as e:
             Domoticz.Error(f"ICS ophalen mislukt: {e}")
@@ -264,6 +275,10 @@ class BasePlugin:
     # ------------------------------------------------------------------
     def onStop(self):
         Domoticz.Log("F1 Info plugin gestopt.")
+        self._stopEvent.set()
+        for t in self._threads:
+            t.join(timeout=FETCH_TIMEOUT + 1)
+        self._threads.clear()
 
 
 # Domoticz plugin entry points
