@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 <plugin key="F1Info" name="F1 Race Info" author="MadPatrick" version="0.1.3"
-        externallink="https://files-f1.motorsportcalendars.com">
+        wikilink="https://files-f1.motorsportcalendars.com"
+        externallink="https://github.com/MadPatrick/Domoticz_F1">
     <description>
+        <h2>F1 Race Info</h2>
+        <p>Version 0.1.3</p>
         Fetches the upcoming F1 race weekend schedule from the motorsportcalendars.com ICS feed.
         Displays the sessions of the next race weekend filtered by type.
         The device name is automatically updated with the location of the Grand Prix.
